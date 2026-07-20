@@ -28,11 +28,16 @@
   .msg .time { color: var(--muted); font-size: 11px; margin-right: 6px; }
   .msg.offender1 { border-left-color: var(--warn1); background: rgba(241,196,15,.06); }
   .msg.offender2 { border-left-color: var(--warn2); background: rgba(230,126,34,.08); }
-  .msg.offender3 { border-left-color: var(--warn3); background: rgba(231,76,60,.10); }
+  .msg.offender3 { border-left-color: #d35400; background: rgba(211,84,0,.10); }
+  .msg.offender4 { border-left-color: var(--warn3); background: rgba(231,76,60,.12); }
   .msg.repeat { background: rgba(231,76,60,.18); border-left-color: var(--repeat); }
+  /* "ganz rot": Wiederholung nach Timeout - staerkstes Signal */
+  .msg.hot { background: #b71c1c; border-left-color: #ff1744; color: #fff; font-weight: 600; }
+  .msg.hot .time { color: #ffcdd2; }
   .badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 10px; margin-left: 6px; vertical-align: middle; }
   .badge.off { background: var(--warn3); color: #fff; }
   .badge.rep { background: #fff; color: var(--repeat); }
+  .badge.hot { background: #fff; color: #b71c1c; }
   .sys { color: var(--muted); font-style: italic; padding: 4px 8px; font-size: 12px; }
   #legend { font-size: 11px; color: var(--muted); padding: 6px 12px; border-top: 1px solid var(--line); background: var(--panel); }
   .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin: 0 3px 0 10px; vertical-align: middle; }
@@ -49,14 +54,18 @@
   <div id="chat"></div>
   <div id="legend">
     Markierungen:
-    <span class="swatch" style="background:#f1c40f"></span>1 Verstoss
-    <span class="swatch" style="background:#e67e22"></span>2 Verstoesse
-    <span class="swatch" style="background:#e74c3c"></span>3+ Verstoesse
-    <span class="swatch" style="background:#e74c3c"></span>gleiche Nachricht &lt;5min (rot hinterlegt)
+    <span class="swatch" style="background:#f1c40f"></span>1 Timeout
+    <span class="swatch" style="background:#e67e22"></span>2 Timeouts
+    <span class="swatch" style="background:#d35400"></span>3 Timeouts
+    <span class="swatch" style="background:#e74c3c"></span>4+ Timeouts
+    <span class="swatch" style="background:#e74c3c"></span>gleiche Nachricht &lt;5min
+    <span class="swatch" style="background:#b71c1c"></span>Wiederholung nach Timeout (ganz rot, 5min)
   </div>
 
 <script>
-const REPEAT_WINDOW_MS = 5 * 60 * 1000;
+const REPEAT_WINDOW_MS = 5 * 60 * 1000;   // gleiche Nachricht kurz hintereinander
+const HOT_WINDOW_MS = 5 * 60 * 1000;      // "ganz rot" bleibt so lange aktiv
+const TIMEOUT_WATCH_MS = 15 * 60 * 1000;  // so lange nach Timeout auf Wiederholung achten
 const $ = (id) => document.getElementById(id);
 
 // Einstellungen merken
@@ -68,6 +77,8 @@ $('apikey').value  = cfg.apikey  || 'rIJeTH7dHltBmYIdnkot3tk8KI79b5Bk';
 let ws = null, connected = false, channel = '';
 let offenders = {};          // { username: {count} }  von der API
 const lastMsg = new Map();   // username -> { text, time, count }
+const timeouts = new Map();  // username -> { text, time }  zuletzt getimeoutet + damalige Nachricht
+const hotUntil = new Map();  // username -> timestamp, bis wann "ganz rot"
 let listTimer = null;
 
 function setStatus(text, cls) {
@@ -124,6 +135,7 @@ function connect() {
     for (const line of ev.data.split('\r\n')) {
       if (!line) continue;
       if (line.startsWith('PING')) { ws.send('PONG :tmi.twitch.tv'); continue; }
+      if (line.includes('CLEARCHAT')) { handleClearchat(line); continue; }
       const msg = parsePrivmsg(line);
       if (msg) render(msg);
     }
@@ -162,32 +174,76 @@ function parsePrivmsg(line) {
   };
 }
 
+// Timeout/Ban aus dem Chat erkennen (Twitch sendet das mit)
+function parseClearchat(line) {
+  let tags = {}; let rest = line;
+  if (line.startsWith('@')) {
+    const sp = line.indexOf(' ');
+    for (const part of line.slice(1, sp).split(';')) { const [k, v] = part.split('='); tags[k] = v; }
+    rest = line.slice(sp + 1);
+  }
+  const m = rest.match(/CLEARCHAT #[^ ]+(?: :(.+))?$/);
+  if (!m) return null;
+  return { user: m[1] ? m[1].trim() : null, duration: tags['ban-duration'] ? Number(tags['ban-duration']) : null };
+}
+
+function handleClearchat(line) {
+  const cc = parseClearchat(line);
+  if (!cc || !cc.user) return; // ganzer Chat geleert -> ignorieren
+  const key = cc.user.toLowerCase();
+  const prev = lastMsg.get(key);
+  if (cc.duration) {
+    // Timeout: merken, welche Nachricht der Nutzer davor geschrieben hat
+    timeouts.set(key, { text: prev ? prev.text : null, time: Date.now() });
+    sys('⏱ ' + cc.user + ' wurde getimeoutet (' + cc.duration + 's) - achte auf Wiederholung.');
+  } else {
+    sys('⛔ ' + cc.user + ' wurde gebannt.');
+  }
+}
+
 function render(m) {
   const key = m.user.toLowerCase();
   const now = Date.now();
+  const norm = m.text.trim().toLowerCase();
 
-  // Wiederholte Nachricht erkennen
+  // Wiederholte Nachricht kurz hintereinander erkennen
   let repeat = false, repeatCount = 1;
   const prev = lastMsg.get(key);
-  const norm = m.text.trim().toLowerCase();
   if (prev && prev.text === norm && now - prev.time < REPEAT_WINDOW_MS) {
     repeat = true; repeatCount = prev.count + 1;
   }
+
+  // Wiederholung NACH einem Timeout? -> staerkstes Signal ("ganz rot")
+  let afterTimeout = false;
+  const to = timeouts.get(key);
+  if (to) {
+    if (now - to.time > TIMEOUT_WATCH_MS) {
+      timeouts.delete(key); // zu lange her, nicht mehr beobachten
+    } else if (to.text && to.text === norm) {
+      afterTimeout = true;
+      hotUntil.set(key, now + HOT_WINDOW_MS); // 5 min lang "ganz rot"
+      timeouts.delete(key);
+    }
+  }
+  const hot = afterTimeout || (hotUntil.get(key) || 0) > now;
+
   lastMsg.set(key, { text: norm, time: now, count: repeat ? repeatCount : 1 });
 
   const div = document.createElement('div');
   div.className = 'msg';
 
-  // Wiederholungstaeter aus der API
+  // Wiederholungstaeter aus der API (rot erst ab 4)
   const off = offenders[key];
   if (off && off.count >= 1) {
-    div.classList.add('offender' + Math.min(off.count, 3));
+    div.classList.add('offender' + Math.min(off.count, 4));
   }
   if (repeat) div.classList.add('repeat');
+  if (hot) div.classList.add('hot'); // ueberschreibt die anderen Farben
 
   const t = new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
   let html = `<span class="time">${t}</span>`;
   html += `<span class="name" style="color:${escapeAttr(m.color)}">${escapeHtml(m.name)}</span>`;
+  if (hot) html += `<span class="badge hot">⛔ Wiederholt nach Timeout</span>`;
   if (off && off.count >= 1) html += `<span class="badge off">⚠ ${off.count}x Timeout</span>`;
   if (repeat) html += `<span class="badge rep">x${repeatCount}</span>`;
   html += ': ' + escapeHtml(m.text);
