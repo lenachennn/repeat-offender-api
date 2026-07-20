@@ -58,12 +58,13 @@
     <span class="swatch" style="background:#e67e22"></span>2 Timeouts
     <span class="swatch" style="background:#d35400"></span>3 Timeouts
     <span class="swatch" style="background:#e74c3c"></span>4+ Timeouts
-    <span class="swatch" style="background:#e74c3c"></span>gleiche Nachricht &lt;5min
+    <span class="swatch" style="background:#e74c3c"></span>gleiche Nachricht 4x+ in 5min
     <span class="swatch" style="background:#b71c1c"></span>Wiederholung nach Timeout (ganz rot, 5min)
   </div>
 
 <script>
 const REPEAT_WINDOW_MS = 5 * 60 * 1000;   // gleiche Nachricht kurz hintereinander
+const REPEAT_MARK_FROM = 4;               // erst ab so vielen gleichen Nachrichten markieren
 const HOT_WINDOW_MS = 5 * 60 * 1000;      // "ganz rot" bleibt so lange aktiv
 const TIMEOUT_WATCH_MS = 15 * 60 * 1000;  // so lange nach Timeout auf Wiederholung achten
 const $ = (id) => document.getElementById(id);
@@ -226,6 +227,7 @@ function render(m) {
     }
   }
   const hot = afterTimeout || (hotUntil.get(key) || 0) > now;
+  const showRepeat = repeat && repeatCount >= REPEAT_MARK_FROM; // erst ab der 4. gleichen Nachricht
 
   lastMsg.set(key, { text: norm, time: now, count: repeat ? repeatCount : 1 });
 
@@ -237,7 +239,7 @@ function render(m) {
   if (off && off.count >= 1) {
     div.classList.add('offender' + Math.min(off.count, 4));
   }
-  if (repeat && !hot) div.classList.add('repeat');
+  if (showRepeat && !hot) div.classList.add('repeat');
   if (hot) div.classList.add('hot'); // ueberschreibt die anderen Farben
 
   const t = new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
@@ -245,7 +247,7 @@ function render(m) {
   html += `<span class="name" style="color:${escapeAttr(m.color)}">${escapeHtml(m.name)}</span>`;
   if (hot) html += `<span class="badge hot">⛔ Wiederholt nach Timeout</span>`;
   if (off && off.count >= 1) html += `<span class="badge off">⚠ ${off.count}x Timeout</span>`;
-  if (repeat && !hot) html += `<span class="badge rep">x${repeatCount}</span>`;
+  if (showRepeat && !hot) html += `<span class="badge rep">x${repeatCount}</span>`;
   html += ': ' + escapeHtml(m.text);
   div.innerHTML = html;
 
