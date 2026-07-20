@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chat-Radar</title>
+<style>
+  :root {
+    --bg: #16181c; --panel: #1f2126; --text: #e4e6eb; --muted: #9aa0aa;
+    --line: #2b2e34; --accent: #9147ff;
+    --warn1: #f1c40f; --warn2: #e67e22; --warn3: #e74c3c; --repeat: #e74c3c;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; }
+  header { background: var(--panel); border-bottom: 1px solid var(--line); padding: 10px 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  header input { background: var(--bg); border: 1px solid var(--line); color: var(--text); padding: 6px 8px; border-radius: 6px; font-size: 13px; }
+  header input#channel { width: 150px; }
+  header input#apibase { width: 200px; }
+  header input#apikey { width: 150px; }
+  header button { background: var(--accent); color: #fff; border: none; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; }
+  header button.off { background: #444; }
+  #status { font-size: 12px; color: var(--muted); margin-left: auto; }
+  #dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: #777; margin-right: 5px; vertical-align: middle; }
+  #dot.on { background: #2ecc71; } #dot.err { background: #e74c3c; }
+  #chat { flex: 1; overflow-y: auto; padding: 8px 10px; }
+  .msg { padding: 4px 8px; border-radius: 6px; margin-bottom: 2px; line-height: 1.4; border-left: 3px solid transparent; word-wrap: break-word; }
+  .msg .name { font-weight: 700; }
+  .msg .time { color: var(--muted); font-size: 11px; margin-right: 6px; }
+  .msg.offender1 { border-left-color: var(--warn1); background: rgba(241,196,15,.06); }
+  .msg.offender2 { border-left-color: var(--warn2); background: rgba(230,126,34,.08); }
+  .msg.offender3 { border-left-color: var(--warn3); background: rgba(231,76,60,.10); }
+  .msg.repeat { background: rgba(231,76,60,.18); border-left-color: var(--repeat); }
+  .badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 10px; margin-left: 6px; vertical-align: middle; }
+  .badge.off { background: var(--warn3); color: #fff; }
+  .badge.rep { background: #fff; color: var(--repeat); }
+  .sys { color: var(--muted); font-style: italic; padding: 4px 8px; font-size: 12px; }
+  #legend { font-size: 11px; color: var(--muted); padding: 6px 12px; border-top: 1px solid var(--line); background: var(--panel); }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin: 0 3px 0 10px; vertical-align: middle; }
+</style>
+</head>
+<body>
+  <header>
+    <input id="channel" placeholder="Kanalname (z.B. lena)" autocomplete="off">
+    <input id="apibase" placeholder="API-Adresse" autocomplete="off">
+    <input id="apikey" placeholder="API-Key" autocomplete="off">
+    <button id="toggle">Verbinden</button>
+    <span id="status"><span id="dot"></span><span id="statustext">nicht verbunden</span></span>
+  </header>
+  <div id="chat"></div>
+  <div id="legend">
+    Markierungen:
+    <span class="swatch" style="background:#f1c40f"></span>1 Verstoss
+    <span class="swatch" style="background:#e67e22"></span>2 Verstoesse
+    <span class="swatch" style="background:#e74c3c"></span>3+ Verstoesse
+    <span class="swatch" style="background:#e74c3c"></span>gleiche Nachricht &lt;5min (rot hinterlegt)
+  </div>
+
+<script>
+const REPEAT_WINDOW_MS = 5 * 60 * 1000;
+const $ = (id) => document.getElementById(id);
+
+// Einstellungen merken
+const cfg = JSON.parse(localStorage.getItem('chatradar') || '{}');
+$('channel').value = cfg.channel || '';
+$('apibase').value = cfg.apibase || 'http://185.249.225.83:8787';
+$('apikey').value  = cfg.apikey  || '';
+
+let ws = null, connected = false, channel = '';
+let offenders = {};          // { username: {count} }  von der API
+const lastMsg = new Map();   // username -> { text, time, count }
+let listTimer = null;
+
+function setStatus(text, cls) {
+  $('statustext').textContent = text;
+  $('dot').className = cls || '';
+}
+function sys(text) {
+  const d = document.createElement('div');
+  d.className = 'sys'; d.textContent = text;
+  $('chat').appendChild(d); scroll();
+}
+function scroll() {
+  const c = $('chat');
+  // Nur automatisch scrollen, wenn man ohnehin fast unten ist
+  if (c.scrollHeight - c.scrollTop - c.clientHeight < 120) c.scrollTop = c.scrollHeight;
+}
+
+async function fetchOffenders() {
+  const base = $('apibase').value.trim().replace(/\/$/, '');
+  const key = $('apikey').value.trim();
+  if (!base || !key || !channel) return;
+  try {
+    const res = await fetch(`${base}/list?key=${encodeURIComponent(key)}&chan=${encodeURIComponent(channel)}`);
+    if (res.ok) offenders = await res.json();
+  } catch (e) { /* API kurz nicht erreichbar - kein Drama */ }
+}
+
+// --- Twitch IRC (anonym, nur lesen) ---
+function connect() {
+  channel = $('channel').value.trim().toLowerCase().replace(/^#/, '');
+  if (!channel) { alert('Bitte einen Kanalnamen eingeben.'); return; }
+
+  localStorage.setItem('chatradar', JSON.stringify({
+    channel: $('channel').value.trim(), apibase: $('apibase').value.trim(), apikey: $('apikey').value.trim()
+  }));
+
+  setStatus('verbinde...', '');
+  ws = new WebSocket('wss://irc-ws.chat.twitch.tv:443');
+
+  ws.onopen = () => {
+    ws.send('CAP REQ :twitch.tv/tags twitch.tv/commands');
+    ws.send('NICK justinfan' + Math.floor(Math.random() * 90000 + 10000));
+    ws.send('JOIN #' + channel);
+    connected = true;
+    $('toggle').textContent = 'Trennen'; $('toggle').classList.add('off');
+    setStatus('verbunden mit #' + channel, 'on');
+    fetchOffenders();
+    listTimer = setInterval(fetchOffenders, 20000);
+  };
+
+  ws.onmessage = (ev) => {
+    for (const line of ev.data.split('\r\n')) {
+      if (!line) continue;
+      if (line.startsWith('PING')) { ws.send('PONG :tmi.twitch.tv'); continue; }
+      const msg = parsePrivmsg(line);
+      if (msg) render(msg);
+    }
+  };
+
+  ws.onclose = () => {
+    connected = false; clearInterval(listTimer);
+    $('toggle').textContent = 'Verbinden'; $('toggle').classList.remove('off');
+    setStatus('getrennt', '');
+  };
+  ws.onerror = () => setStatus('Verbindungsfehler', 'err');
+}
+
+function disconnect() { if (ws) ws.close(); }
+
+function parsePrivmsg(line) {
+  let tags = {};
+  let rest = line;
+  if (line.startsWith('@')) {
+    const sp = line.indexOf(' ');
+    for (const part of line.slice(1, sp).split(';')) {
+      const [k, v] = part.split('=');
+      tags[k] = v;
+    }
+    rest = line.slice(sp + 1);
+  }
+  if (!rest.includes('PRIVMSG')) return null;
+  const userMatch = rest.match(/^:([^!]+)!/);
+  const textMatch = rest.match(/PRIVMSG #[^ ]+ :(.*)$/);
+  if (!userMatch || !textMatch) return null;
+  return {
+    user: userMatch[1],
+    name: tags['display-name'] || userMatch[1],
+    color: tags['color'] || '#bbbbbb',
+    text: textMatch[1],
+  };
+}
+
+function render(m) {
+  const key = m.user.toLowerCase();
+  const now = Date.now();
+
+  // Wiederholte Nachricht erkennen
+  let repeat = false, repeatCount = 1;
+  const prev = lastMsg.get(key);
+  const norm = m.text.trim().toLowerCase();
+  if (prev && prev.text === norm && now - prev.time < REPEAT_WINDOW_MS) {
+    repeat = true; repeatCount = prev.count + 1;
+  }
+  lastMsg.set(key, { text: norm, time: now, count: repeat ? repeatCount : 1 });
+
+  const div = document.createElement('div');
+  div.className = 'msg';
+
+  // Wiederholungstaeter aus der API
+  const off = offenders[key];
+  if (off && off.count >= 1) {
+    div.classList.add('offender' + Math.min(off.count, 3));
+  }
+  if (repeat) div.classList.add('repeat');
+
+  const t = new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+  let html = `<span class="time">${t}</span>`;
+  html += `<span class="name" style="color:${escapeAttr(m.color)}">${escapeHtml(m.name)}</span>`;
+  if (off && off.count >= 1) html += `<span class="badge off">⚠ ${off.count}x Timeout</span>`;
+  if (repeat) html += `<span class="badge rep">x${repeatCount}</span>`;
+  html += ': ' + escapeHtml(m.text);
+  div.innerHTML = html;
+
+  $('chat').appendChild(div);
+  // Alte Nachrichten begrenzen
+  const chat = $('chat');
+  while (chat.childElementCount > 400) chat.removeChild(chat.firstChild);
+  scroll();
+}
+
+function escapeHtml(s) { return s.replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function escapeAttr(s) { return /^#[0-9a-fA-F]{6}$/.test(s) ? s : '#bbbbbb'; }
+
+$('toggle').addEventListener('click', () => connected ? disconnect() : connect());
+sys('Kanalnamen eingeben und auf "Verbinden" klicken. Nur-Lese-Modus, kein Login noetig.');
+</script>
+</body>
+</html>

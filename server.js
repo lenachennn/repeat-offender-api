@@ -62,6 +62,12 @@ function durationFor(count) {
 const app = express();
 app.set('trust proxy', true);
 
+// Erlaubt dem lokalen Chat-Fenster (andere Herkunft) den Zugriff
+app.use((_req, res, next) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  next();
+});
+
 // Schluessel-Pruefung fuer alle Endpunkte
 app.use((req, res, next) => {
   if (req.path === '/health') return next();
@@ -111,6 +117,17 @@ app.get('/reset', (req, res) => {
   save();
   console.log(`[reset] ${chan}/${user} zurueckgesetzt`);
   res.type('text/plain').send('reset ok');
+});
+
+// Liefert alle bekannten Wiederholungstaeter eines Kanals als JSON.
+// Das Chat-Fenster fragt das regelmaessig ab, um Nutzer farblich zu markieren.
+app.get('/list', (req, res) => {
+  const c = norm(req.query.chan);
+  const out = {};
+  for (const [user, rec] of Object.entries(db[c] || {})) {
+    out[user] = { count: rec.count, lastOffense: rec.lastOffense };
+  }
+  res.json(out);
 });
 
 app.get('/health', (_req, res) => res.type('text/plain').send('ok'));

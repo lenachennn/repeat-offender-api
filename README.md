@@ -13,6 +13,7 @@ Laeuft auf dem Contabo-Server (`185.249.225.83`) unter pm2, Port `8787`.
 | `/next?key=KEY&user=NAME&chan=KANAL` | Zaehlt Verstoss hoch, gibt neue Timeout-Dauer (Sekunden) zurueck |
 | `/status?key=KEY&user=NAME&chan=KANAL` | Zeigt Zaehler + naechste Dauer (ohne hochzuzaehlen) |
 | `/reset?key=KEY&user=NAME&chan=KANAL` | Setzt einen Nutzer zurueck |
+| `/list?key=KEY&chan=KANAL` | Alle Wiederholungstaeter des Kanals als JSON (fuer das Chat-Fenster) |
 
 Eskalations-Stufen und Zuruecksetz-Zeit werden in der `.env` eingestellt
 (`TIERS`, `DECAY_DAYS`).
@@ -45,6 +46,18 @@ Einfach im Browser oeffnen (KEY, Name, Kanal anpassen):
 
 - Status: `http://185.249.225.83:8787/status?key=KEY&user=NAME&chan=KANAL`
 - Reset:  `http://185.249.225.83:8787/reset?key=KEY&user=NAME&chan=KANAL`
+
+## Chat-Fenster (chat-fenster.html)
+
+Ein zusaetzliches Nur-Lese-Fenster NEBEN Chatty - ersetzt Chatty nicht.
+Einfach `chat-fenster.html` doppelklicken (oeffnet im Browser), Kanalnamen eingeben,
+"Verbinden". Kein Login noetig (liest den Twitch-Chat anonym).
+
+Markiert automatisch:
+- **Wiederholungstaeter** (aus der API): 1x gelb, 2x orange, 3x+ rot, mit Timeout-Zaehler
+- **Gleiche Nachricht innerhalb von 5 Minuten**: rot hinterlegt mit x2/x3-Zaehler
+
+API-Adresse und API-Key sind oben im Fenster einstellbar (werden lokal gemerkt).
 
 ## Hinweise
 
