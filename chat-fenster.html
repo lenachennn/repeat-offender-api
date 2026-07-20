@@ -38,6 +38,7 @@
   .badge.off { background: var(--warn3); color: #fff; }
   .badge.rep { background: #fff; color: var(--repeat); }
   .badge.hot { background: #fff; color: #b71c1c; }
+  .tbadge { display: inline-block; font-size: 10px; font-weight: 700; color: #fff; padding: 1px 5px; border-radius: 4px; margin-right: 4px; vertical-align: middle; letter-spacing: .3px; }
   .sys { color: var(--muted); font-style: italic; padding: 4px 8px; font-size: 12px; }
   #legend { font-size: 11px; color: var(--muted); padding: 6px 12px; border-top: 1px solid var(--line); background: var(--panel); }
   .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin: 0 3px 0 10px; vertical-align: middle; }
@@ -74,6 +75,30 @@ const cfg = JSON.parse(localStorage.getItem('chatradar') || '{}');
 $('channel').value = cfg.channel || '';
 $('apibase').value = cfg.apibase || 'http://185.249.225.83:8787';
 $('apikey').value  = cfg.apikey  || 'rIJeTH7dHltBmYIdnkot3tk8KI79b5Bk';
+
+// Twitch-Rollen als farbige Schildchen (Farben angelehnt an Twitch)
+const BADGE_MAP = {
+  broadcaster: { label: 'STREAM', bg: '#e91916' },
+  moderator:   { label: 'MOD',    bg: '#00ad03' },
+  vip:         { label: 'VIP',    bg: '#e005b9' },
+  founder:     { label: 'FOUNDER', bg: '#9147ff' },
+  subscriber:  { label: 'SUB',    bg: '#8205b4' },
+  artist:      { label: 'ARTIST', bg: '#e005b9' },
+  staff:       { label: 'STAFF',  bg: '#6441a5' },
+  admin:       { label: 'ADMIN',  bg: '#6441a5' },
+  global_mod:  { label: 'GMOD',   bg: '#00ad03' },
+  partner:     { label: '✓',      bg: '#9147ff' },
+};
+
+function badgesHtml(badgesTag) {
+  if (!badgesTag) return '';
+  let out = '';
+  for (const b of badgesTag.split(',')) {
+    const info = BADGE_MAP[b.split('/')[0]];
+    if (info) out += `<span class="tbadge" style="background:${info.bg}">${info.label}</span>`;
+  }
+  return out;
+}
 
 let ws = null, connected = false, channel = '';
 let offenders = {};          // { username: {count} }  von der API
@@ -171,6 +196,7 @@ function parsePrivmsg(line) {
     user: userMatch[1],
     name: tags['display-name'] || userMatch[1],
     color: tags['color'] || '#bbbbbb',
+    badges: tags['badges'] || '',
     text: textMatch[1],
   };
 }
@@ -244,6 +270,7 @@ function render(m) {
 
   const t = new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
   let html = `<span class="time">${t}</span>`;
+  html += badgesHtml(m.badges);
   html += `<span class="name" style="color:${escapeAttr(m.color)}">${escapeHtml(m.name)}</span>`;
   if (hot) html += `<span class="badge hot">⛔ Wiederholt nach Timeout</span>`;
   if (off && off.count >= 1) html += `<span class="badge off">⚠ ${off.count}x Timeout</span>`;
