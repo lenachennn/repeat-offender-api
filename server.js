@@ -59,6 +59,62 @@ function durationFor(count) {
   return TIERS[Math.max(0, idx)];
 }
 
+// --- Offizielle Twitch-Abzeichen ---
+const TWITCH_CLIENT_ID = process.env.TWITCH_CLIENT_ID || '';
+const TWITCH_CLIENT_SECRET = process.env.TWITCH_CLIENT_SECRET || '';
+let twToken = { value: null, expires: 0 };
+let globalBadges = { data: null, fetchedAt: 0 };
+const channelBadges = new Map(); // login -> { data, fetchedAt }
+const channelId = new Map();     // login -> id
+
+async function twGetToken() {
+  if (twToken.value && Date.now() < twToken.expires) return twToken.value;
+  const res = await fetch('https://id.twitch.tv/oauth2/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ client_id: TWITCH_CLIENT_ID, client_secret: TWITCH_CLIENT_SECRET, grant_type: 'client_credentials' }),
+  });
+  const j = await res.json();
+  if (!j.access_token) throw new Error('kein Twitch-Token (Client-ID/Secret pruefen)');
+  twToken = { value: j.access_token, expires: Date.now() + (j.expires_in - 60) * 1000 };
+  return twToken.value;
+}
+
+async function twGet(url) {
+  const token = await twGetToken();
+  const res = await fetch(url, { headers: { 'Client-Id': TWITCH_CLIENT_ID, 'Authorization': 'Bearer ' + token } });
+  if (!res.ok) throw new Error('Twitch API ' + res.status);
+  return res.json();
+}
+
+function badgeMap(sets, out) {
+  for (const s of sets) for (const v of s.versions) out[`${s.set_id}/${v.id}`] = v.image_url_2x;
+  return out;
+}
+
+async function getGlobalBadges() {
+  if (globalBadges.data && Date.now() - globalBadges.fetchedAt < 24 * 60 * 60 * 1000) return globalBadges.data;
+  const j = await twGet('https://api.twitch.tv/helix/chat/badges/global');
+  globalBadges = { data: badgeMap(j.data, {}), fetchedAt: Date.now() };
+  return globalBadges.data;
+}
+
+async function getChannelBadges(login) {
+  const l = norm(login);
+  const cached = channelBadges.get(l);
+  if (cached && Date.now() - cached.fetchedAt < 60 * 60 * 1000) return cached.data;
+  let id = channelId.get(l);
+  if (!id) {
+    const u = await twGet('https://api.twitch.tv/helix/users?login=' + encodeURIComponent(l));
+    id = u.data[0] ? u.data[0].id : null;
+    channelId.set(l, id);
+  }
+  let map = {};
+  if (id) map = badgeMap((await twGet('https://api.twitch.tv/helix/chat/badges?broadcaster_id=' + id)).data, {});
+  channelBadges.set(l, { data: map, fetchedAt: Date.now() });
+  return map;
+}
+
 const app = express();
 app.set('trust proxy', true);
 
@@ -128,6 +184,22 @@ app.get('/list', (req, res) => {
     out[user] = { count: rec.count, lastOffense: rec.lastOffense };
   }
   res.json(out);
+});
+
+// Offizielle Twitch-Abzeichen fuer einen Kanal (global + kanaleigene Sub-Abzeichen).
+// Antwort: { "set/version": "bild-url", ... }
+app.get('/badges', async (req, res) => {
+  if (!TWITCH_CLIENT_ID || !TWITCH_CLIENT_SECRET) {
+    return res.status(503).json({ error: 'Twitch nicht konfiguriert' });
+  }
+  try {
+    const global = await getGlobalBadges();
+    const channel = req.query.chan ? await getChannelBadges(req.query.chan) : {};
+    res.json({ ...global, ...channel }); // kanaleigene ueberschreiben globale
+  } catch (e) {
+    console.error('[badges]', e.message);
+    res.status(502).json({ error: e.message });
+  }
 });
 
 app.get('/health', (_req, res) => res.type('text/plain').send('ok'));

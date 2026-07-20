@@ -39,6 +39,7 @@
   .badge.rep { background: #fff; color: var(--repeat); }
   .badge.hot { background: #fff; color: #b71c1c; }
   .tbadge { display: inline-block; font-size: 10px; font-weight: 700; color: #fff; padding: 1px 5px; border-radius: 4px; margin-right: 4px; vertical-align: middle; letter-spacing: .3px; }
+  .tbadge-img { height: 18px; width: 18px; border-radius: 3px; margin-right: 3px; vertical-align: middle; }
   .sys { color: var(--muted); font-style: italic; padding: 4px 8px; font-size: 12px; }
   #legend { font-size: 11px; color: var(--muted); padding: 6px 12px; border-top: 1px solid var(--line); background: var(--panel); }
   .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin: 0 3px 0 10px; vertical-align: middle; }
@@ -94,14 +95,23 @@ function badgesHtml(badgesTag) {
   if (!badgesTag) return '';
   let out = '';
   for (const b of badgesTag.split(',')) {
-    const info = BADGE_MAP[b.split('/')[0]];
-    if (info) out += `<span class="tbadge" style="background:${info.bg}">${info.label}</span>`;
+    const set = b.split('/')[0];
+    const url = badgeImages[b];
+    if (url && url.startsWith('https://static-cdn.jtvnw.net/')) {
+      // echtes Twitch-Bild
+      out += `<img class="tbadge-img" src="${url}" alt="${escapeHtml(set)}" title="${escapeHtml(set)}">`;
+    } else {
+      // Rueckfall: farbiges Text-Schildchen
+      const info = BADGE_MAP[set];
+      if (info) out += `<span class="tbadge" style="background:${info.bg}">${info.label}</span>`;
+    }
   }
   return out;
 }
 
 let ws = null, connected = false, channel = '';
 let offenders = {};          // { username: {count} }  von der API
+let badgeImages = {};        // { "set/version": bild-url }  von der API (echte Twitch-Abzeichen)
 const lastMsg = new Map();   // username -> { text, time, count }
 const timeouts = new Map();  // username -> { text, time }  zuletzt getimeoutet + damalige Nachricht
 const hotUntil = new Map();  // username -> timestamp, bis wann "ganz rot"
@@ -132,6 +142,16 @@ async function fetchOffenders() {
   } catch (e) { /* API kurz nicht erreichbar - kein Drama */ }
 }
 
+async function fetchBadges() {
+  const base = $('apibase').value.trim().replace(/\/$/, '');
+  const key = $('apikey').value.trim();
+  if (!base || !key || !channel) return;
+  try {
+    const res = await fetch(`${base}/badges?key=${encodeURIComponent(key)}&chan=${encodeURIComponent(channel)}`);
+    if (res.ok) badgeImages = await res.json();
+  } catch (e) { /* dann eben die Text-Schildchen als Rueckfall */ }
+}
+
 // --- Twitch IRC (anonym, nur lesen) ---
 function connect() {
   channel = $('channel').value.trim().toLowerCase().replace(/^#/, '');
@@ -154,6 +174,7 @@ function connect() {
     setStatus('verbunden mit #' + channel, 'on');
     sys('✓ Verbunden mit #' + channel + '. Warte auf Nachrichten... (bei ruhigem Chat kann das dauern)');
     fetchOffenders();
+    fetchBadges();
     listTimer = setInterval(fetchOffenders, 20000);
   };
 
