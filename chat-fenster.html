@@ -237,7 +237,7 @@ function render(m) {
   if (off && off.count >= 1) {
     div.classList.add('offender' + Math.min(off.count, 4));
   }
-  if (repeat) div.classList.add('repeat');
+  if (repeat && !hot) div.classList.add('repeat');
   if (hot) div.classList.add('hot'); // ueberschreibt die anderen Farben
 
   const t = new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
@@ -245,7 +245,7 @@ function render(m) {
   html += `<span class="name" style="color:${escapeAttr(m.color)}">${escapeHtml(m.name)}</span>`;
   if (hot) html += `<span class="badge hot">⛔ Wiederholt nach Timeout</span>`;
   if (off && off.count >= 1) html += `<span class="badge off">⚠ ${off.count}x Timeout</span>`;
-  if (repeat) html += `<span class="badge rep">x${repeatCount}</span>`;
+  if (repeat && !hot) html += `<span class="badge rep">x${repeatCount}</span>`;
   html += ': ' + escapeHtml(m.text);
   div.innerHTML = html;
 
