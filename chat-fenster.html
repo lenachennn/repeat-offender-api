@@ -63,7 +63,7 @@ const $ = (id) => document.getElementById(id);
 const cfg = JSON.parse(localStorage.getItem('chatradar') || '{}');
 $('channel').value = cfg.channel || '';
 $('apibase').value = cfg.apibase || 'http://185.249.225.83:8787';
-$('apikey').value  = cfg.apikey  || '';
+$('apikey').value  = cfg.apikey  || 'rIJeTH7dHltBmYIdnkot3tk8KI79b5Bk';
 
 let ws = null, connected = false, channel = '';
 let offenders = {};          // { username: {count} }  von der API
@@ -98,13 +98,14 @@ async function fetchOffenders() {
 // --- Twitch IRC (anonym, nur lesen) ---
 function connect() {
   channel = $('channel').value.trim().toLowerCase().replace(/^#/, '');
-  if (!channel) { alert('Bitte einen Kanalnamen eingeben.'); return; }
+  if (!channel) { sys('⚠ Bitte zuerst oben einen Kanalnamen eingeben und dann erneut auf "Verbinden" klicken.'); return; }
 
   localStorage.setItem('chatradar', JSON.stringify({
     channel: $('channel').value.trim(), apibase: $('apibase').value.trim(), apikey: $('apikey').value.trim()
   }));
 
   setStatus('verbinde...', '');
+  sys('Verbinde mit #' + channel + ' ...');
   ws = new WebSocket('wss://irc-ws.chat.twitch.tv:443');
 
   ws.onopen = () => {
@@ -114,6 +115,7 @@ function connect() {
     connected = true;
     $('toggle').textContent = 'Trennen'; $('toggle').classList.add('off');
     setStatus('verbunden mit #' + channel, 'on');
+    sys('✓ Verbunden mit #' + channel + '. Warte auf Nachrichten... (bei ruhigem Chat kann das dauern)');
     fetchOffenders();
     listTimer = setInterval(fetchOffenders, 20000);
   };
