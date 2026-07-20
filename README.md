@@ -21,10 +21,12 @@ Eskalations-Stufen und Zuruecksetz-Zeit werden in der `.env` eingestellt
 
 ### 1. Custom Command anlegen
 Chatty -> **Settings -> Commands** -> Feld "Custom Commands", diese Zeile einfuegen
-(KEY durch den echten API_KEY aus der .env ersetzen):
+(KEY durch den echten API_KEY aus der .env ersetzen).
+WICHTIG: Custom Commands nutzen ein LEERZEICHEN nach dem Namen, kein `=`
+(das `=` gilt nur fuer Menue-Eintraege):
 
 ```
-/ro=/timeout $$1 $request(http://185.249.225.83:8787/next?key=KEY&user=$$1&chan=$(chan)) $(2-)
+/ro /timeout $$1 $request(http://185.249.225.83:8787/next?key=KEY&user=$$1&chan=$(chan)) $(2-)
 ```
 
 ### 2. Rechtsklick-Menue anlegen
