@@ -187,8 +187,8 @@ function sys(text) {
 }
 function scroll() {
   const c = $('chat');
-  // Nur automatisch scrollen, wenn man ohnehin fast unten ist
-  if (c.scrollHeight - c.scrollTop - c.clientHeight < 120) c.scrollTop = c.scrollHeight;
+  // Immer ganz nach unten - der Chat bleibt nie stehen
+  c.scrollTop = c.scrollHeight;
 }
 
 async function fetchOffenders() {
