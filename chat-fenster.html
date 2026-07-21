@@ -36,7 +36,8 @@
   .msg.hot .time { color: #ffcdd2; }
   .badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 10px; margin-left: 6px; vertical-align: middle; }
   .badge.off { background: var(--warn3); color: #fff; }
-  .badge.rep { background: #fff; color: var(--repeat); }
+  .badge.rep { background: #3a3d44; color: #e4e6eb; }        /* Zaehler x2/x3 - neutral */
+  .msg.repeat .badge.rep { background: #fff; color: var(--repeat); }  /* ab x4 - rot */
   .badge.hot { background: #fff; color: #b71c1c; }
   .tbadge { display: inline-block; font-size: 10px; font-weight: 700; color: #fff; padding: 1px 5px; border-radius: 4px; margin-right: 4px; vertical-align: middle; letter-spacing: .3px; }
   .tbadge-img { height: 18px; width: 18px; border-radius: 3px; margin-right: 3px; vertical-align: middle; }
@@ -60,7 +61,8 @@
     <span class="swatch" style="background:#e67e22"></span>2 Timeouts
     <span class="swatch" style="background:#d35400"></span>3 Timeouts
     <span class="swatch" style="background:#e74c3c"></span>4+ Timeouts
-    <span class="swatch" style="background:#e74c3c"></span>gleiche Nachricht 4x+ in 5min
+    <span class="swatch" style="background:#3a3d44"></span>Zaehler ab 2x (in 5min)
+    <span class="swatch" style="background:#e74c3c"></span>gleiche Nachricht ab 4x rot
     <span class="swatch" style="background:#b71c1c"></span>Wiederholung nach Timeout (ganz rot, 5min)
   </div>
 
@@ -295,7 +297,7 @@ function render(m) {
   html += `<span class="name" style="color:${escapeAttr(m.color)}">${escapeHtml(m.name)}</span>`;
   if (hot) html += `<span class="badge hot">⛔ Wiederholt nach Timeout</span>`;
   if (off && off.count >= 1) html += `<span class="badge off">⚠ ${off.count}x Timeout</span>`;
-  if (showRepeat && !hot) html += `<span class="badge rep">x${repeatCount}</span>`;
+  if (repeat && !hot) html += `<span class="badge rep">x${repeatCount}</span>`;
   html += ': ' + escapeHtml(m.text);
   div.innerHTML = html;
 
