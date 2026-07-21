@@ -22,7 +22,18 @@
   #status { font-size: 12px; color: var(--muted); margin-left: auto; }
   #dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: #777; margin-right: 5px; vertical-align: middle; }
   #dot.on { background: #2ecc71; } #dot.err { background: #e74c3c; }
+  #main { flex: 1; display: flex; min-height: 0; }
   #chat { flex: 1; overflow-y: auto; padding: 8px 10px; }
+  #watchpanel { width: 170px; flex-shrink: 0; border-left: 1px solid var(--line); background: var(--panel); overflow-y: auto; padding: 6px; font-size: 12px; }
+  #watchpanel .whead { font-weight: 700; color: var(--muted); padding: 2px 4px 6px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+  .wrow { display: flex; justify-content: space-between; gap: 6px; padding: 4px; border-radius: 4px; align-items: center; cursor: pointer; }
+  .wrow .wname { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wrow .wtime { flex-shrink: 0; font-variant-numeric: tabular-nums; }
+  .wrow.active { background: rgba(231,76,60,.18); }
+  .wrow.active .wtime { color: #ff6b6b; font-weight: 700; }
+  .wrow.paused .wtime { color: #f1c40f; }
+  .wrow.idle { opacity: .5; }
+  .wrow.idle .wtime { color: var(--muted); }
   .msg { padding: 4px 8px; border-radius: 6px; margin-bottom: 2px; line-height: 1.4; border-left: 3px solid transparent; word-wrap: break-word; }
   .msg .name { font-weight: 700; }
   .msg .time { color: var(--muted); font-size: 11px; margin-right: 6px; }
@@ -54,7 +65,10 @@
     <button id="toggle">Verbinden</button>
     <span id="status"><span id="dot"></span><span id="statustext">nicht verbunden</span></span>
   </header>
-  <div id="chat"></div>
+  <div id="main">
+    <div id="chat"></div>
+    <div id="watchpanel"></div>
+  </div>
   <div id="legend">
     Markierungen:
     <span class="swatch" style="background:#f1c40f"></span>1 Timeout
@@ -71,6 +85,7 @@ const REPEAT_WINDOW_MS = 5 * 60 * 1000;   // gleiche Nachricht kurz hintereinand
 const REPEAT_MARK_FROM = 4;               // erst ab so vielen gleichen Nachrichten markieren
 const HOT_WINDOW_MS = 5 * 60 * 1000;      // "ganz rot" bleibt so lange aktiv
 const TIMEOUT_WATCH_MS = 15 * 60 * 1000;  // so lange nach Timeout auf Wiederholung achten
+const COOLDOWN_MS = 5 * 60 * 1000;        // "im Visier"-Cooldown (rote Phase)
 const $ = (id) => document.getElementById(id);
 
 // Einstellungen merken
@@ -117,7 +132,49 @@ let badgeImages = {};        // { "set/version": bild-url }  von der API (echte 
 const lastMsg = new Map();   // username -> { text, time, count }
 const timeouts = new Map();  // username -> { text, time }  zuletzt getimeoutet + damalige Nachricht
 const hotUntil = new Map();  // username -> timestamp, bis wann "ganz rot"
+const watch = new Map();     // username -> { name, count, cooldownUntil, timedOutUntil }  "im Visier"
 let listTimer = null;
+
+// Mods/Streamer/Staff zaehlen nicht mit
+function isModLike(badgesTag) {
+  if (!badgesTag) return false;
+  return badgesTag.split(',').some((b) => ['broadcaster', 'moderator', 'staff', 'admin', 'global_mod'].includes(b.split('/')[0]));
+}
+
+function fmtTime(sec) { return Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0'); }
+
+// Liste oben rechts aktualisieren (laeuft jede Sekunde)
+function renderWatchPanel() {
+  const now = Date.now();
+  const panel = $('watchpanel');
+  if (!panel) return;
+  if (watch.size === 0) { panel.innerHTML = ''; return; }
+  let html = `<div class="whead">Im Visier (${watch.size}) - Klick entfernt</div>`;
+  for (const [key, w] of watch) {
+    let status, cls;
+    if (w.timedOutUntil > now) { status = '⏸ ' + fmtTime(Math.ceil((w.timedOutUntil - now) / 1000)); cls = 'paused'; }
+    else if (w.cooldownUntil > now) { status = '⏳ ' + fmtTime(Math.ceil((w.cooldownUntil - now) / 1000)); cls = 'active'; }
+    else { status = 'ruhig'; cls = 'idle'; }
+    html += `<div class="wrow ${cls}" data-key="${escapeAttrText(key)}" title="${escapeHtml(w.name)} - ${w.count}x">` +
+            `<span class="wname">${escapeHtml(w.name)}</span><span class="wtime">${status}</span></div>`;
+  }
+  panel.innerHTML = html;
+}
+
+function watchTick() {
+  const now = Date.now();
+  for (const w of watch.values()) {
+    // Timeout abgelaufen -> Cooldown neu starten (5 min)
+    if (w.timedOutUntil && now >= w.timedOutUntil) {
+      w.cooldownUntil = w.timedOutUntil + COOLDOWN_MS;
+      w.timedOutUntil = 0;
+    }
+  }
+  renderWatchPanel();
+}
+setInterval(watchTick, 1000);
+
+function escapeAttrText(s) { return String(s).replace(/[^a-z0-9_]/gi, ''); }
 
 function setStatus(text, cls) {
   $('statustext').textContent = text;
@@ -245,7 +302,10 @@ function handleClearchat(line) {
   if (cc.duration) {
     // Timeout: merken, welche Nachricht der Nutzer davor geschrieben hat
     timeouts.set(key, { text: prev ? prev.text : null, time: Date.now() });
-    sys('⏱ ' + cc.user + ' wurde getimeoutet (' + cc.duration + 's) - achte auf Wiederholung.');
+    // Cooldown eines Nutzers im Visier pausieren (startet nach Timeout neu)
+    const w = watch.get(key);
+    if (w) { w.timedOutUntil = Date.now() + cc.duration * 1000; renderWatchPanel(); }
+    sys('⏱ ' + cc.user + ' wurde getimeoutet (' + cc.duration + 's) - Cooldown pausiert.');
   } else {
     sys('⛔ ' + cc.user + ' wurde gebannt.');
   }
@@ -276,7 +336,20 @@ function render(m) {
     }
   }
   const hot = afterTimeout || (hotUntil.get(key) || 0) > now;
-  const showRepeat = repeat && repeatCount >= REPEAT_MARK_FROM; // erst ab der 4. gleichen Nachricht
+  const mod = isModLike(m.badges);       // Mods zaehlen nicht mit
+  const showCount = repeat && !mod;      // Zaehler x2/x3 nur bei Nicht-Mods
+
+  // Ins "Visier" aufnehmen, sobald 4x dieselbe Nachricht (nur Nicht-Mods)
+  if (!mod && repeat && repeatCount >= REPEAT_MARK_FROM) {
+    let w = watch.get(key);
+    if (!w) { w = { name: m.name, count: 0, cooldownUntil: 0, timedOutUntil: 0 }; watch.set(key, w); }
+    w.name = m.name;
+    w.count = repeatCount;
+    if (!(w.timedOutUntil > now)) w.cooldownUntil = now + COOLDOWN_MS; // waehrend Timeout nicht verlaengern
+    renderWatchPanel();
+  }
+  const w = watch.get(key);
+  const active = !!w && !mod && !(w.timedOutUntil > now) && w.cooldownUntil > now; // rote Phase
 
   lastMsg.set(key, { text: norm, time: now, count: repeat ? repeatCount : 1 });
 
@@ -288,7 +361,7 @@ function render(m) {
   if (off && off.count >= 1) {
     div.classList.add('offender' + Math.min(off.count, 4));
   }
-  if (showRepeat && !hot) div.classList.add('repeat');
+  if (active && !hot) div.classList.add('repeat'); // rot nur waehrend Cooldown
   if (hot) div.classList.add('hot'); // ueberschreibt die anderen Farben
 
   const t = new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
@@ -297,7 +370,7 @@ function render(m) {
   html += `<span class="name" style="color:${escapeAttr(m.color)}">${escapeHtml(m.name)}</span>`;
   if (hot) html += `<span class="badge hot">⛔ Wiederholt nach Timeout</span>`;
   if (off && off.count >= 1) html += `<span class="badge off">⚠ ${off.count}x Timeout</span>`;
-  if (repeat && !hot) html += `<span class="badge rep">x${repeatCount}</span>`;
+  if (showCount && !hot) html += `<span class="badge rep">x${repeatCount}</span>`;
   html += ': ' + escapeHtml(m.text);
   div.innerHTML = html;
 
@@ -310,6 +383,12 @@ function render(m) {
 
 function escapeHtml(s) { return s.replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function escapeAttr(s) { return /^#[0-9a-fA-F]{6}$/.test(s) ? s : '#bbbbbb'; }
+
+// Klick auf einen Eintrag im Visier entfernt ihn
+$('watchpanel').addEventListener('click', (e) => {
+  const row = e.target.closest('.wrow');
+  if (row && row.dataset.key) { watch.delete(row.dataset.key); renderWatchPanel(); }
+});
 
 $('toggle').addEventListener('click', () => connected ? disconnect() : connect());
 sys('Kanalnamen eingeben und auf "Verbinden" klicken. Nur-Lese-Modus, kein Login noetig.');
