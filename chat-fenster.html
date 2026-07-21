@@ -185,6 +185,7 @@ const lastMsg = new Map();   // username -> { text, time, count }
 const timeouts = new Map();  // username -> { text, time }  zuletzt getimeoutet + damalige Nachricht
 const hotUntil = new Map();  // username -> timestamp, bis wann "ganz rot"
 const watch = new Map();     // username -> { name, count, redUntil, timedOutUntil }  "im Visier"
+const repeatScore = new Map(); // username -> Anzahl Wiederholungen insgesamt (permanent, waechst nur)
 let listTimer = null;
 
 // Mods/Streamer/Staff zaehlen nicht mit
@@ -502,15 +503,18 @@ function render(m) {
 
   const mod = isModLike(m.badges); // Mods zaehlen nicht mit
 
-  // Wiederholungen: permanenter Zaehler (bleibt, kein Zeitlimit) + Fenster-Zaehler (fuer rot/Visier)
+  // Dauerhafter Wiederholungs-Zaehler pro Nutzer (bleibt - auch wenn was anderes dazwischen kommt)
+  // + Fenster-Zaehler (nur fuer rot/Visier: X-mal dasselbe innerhalb der eingestellten Minuten)
   const prev = lastMsg.get(key);
-  let isRepeat = false, permCount = 1, winCount = 1;
-  if (prev && prev.text === norm) {
-    isRepeat = true;
-    permCount = prev.permCount + 1;                                 // bleibt permanent
-    winCount = (now - prev.time < winMs()) ? prev.winCount + 1 : 1; // nur innerhalb des Zeitfensters
+  const isRepeat = !!(prev && prev.text === norm);
+  let winCount = 1;
+  if (isRepeat) {
+    winCount = (now - prev.time < winMs()) ? prev.winCount + 1 : 1;
+    repeatScore.set(key, (repeatScore.get(key) || 0) + 1); // waechst nur, wird nie zurueckgesetzt
   }
-  lastMsg.set(key, { text: norm, time: now, permCount, winCount });
+  lastMsg.set(key, { text: norm, time: now, winCount });
+  const score = repeatScore.get(key) || 0;
+  const shown = score + 1; // Anzeige: einmal geschrieben = 1, einmal wiederholt = 2 ...
 
   // Wiederholung NACH einem Timeout? -> staerkstes Signal ("ganz rot")
   let afterTimeout = false;
@@ -525,7 +529,7 @@ function render(m) {
   if (!mod && isRepeat) {
     if (winCount >= RS.visierFrom) {
       const w0 = watch.get(key) || { name: m.name, count: 0, redUntil: 0, timedOutUntil: 0 };
-      w0.name = m.name; w0.count = permCount; watch.set(key, w0);
+      w0.name = m.name; w0.count = shown; watch.set(key, w0);
     }
     const w0 = watch.get(key);
     if (w0 && winCount >= RS.redFrom && !(w0.timedOutUntil > now)) w0.redUntil = now + winMs();
@@ -562,7 +566,7 @@ function render(m) {
   if (am) html += `<span class="badge am">🤖 AUTOMOD → ${am.label}</span>`;
   if (hot) html += `<span class="badge hot">⛔ Wiederholt nach Timeout</span>`;
   if (off && off.count >= 1) html += `<span class="badge off">⚠ ${off.count}x Timeout</span>`;
-  if (!mod && permCount >= 2 && !hot) html += `<span class="badge rep">x${permCount}</span>`;
+  if (!mod && score >= 1 && !hot) html += `<span class="badge rep">x${shown}</span>`;
   html += ': ' + escapeHtml(m.text);
   div.innerHTML = html;
 
