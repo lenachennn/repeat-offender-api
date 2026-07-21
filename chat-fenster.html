@@ -51,6 +51,19 @@
   .msg.repeat .badge.rep { background: #fff; color: var(--repeat); }  /* ab x4 - rot */
   .badge.hot { background: #fff; color: #b71c1c; }
   .tbadge { display: inline-block; font-size: 10px; font-weight: 700; color: #fff; padding: 1px 5px; border-radius: 4px; margin-right: 4px; vertical-align: middle; letter-spacing: .3px; }
+  .msg.automod { background: #4a0000; border-left-color: #ff1744; color: #fff; font-weight: 600; }
+  .badge.am { background: #ff1744; color: #fff; }
+  header button#rulesbtn { background: #3a3d44; }
+  #rules-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none; align-items: center; justify-content: center; z-index: 100; }
+  #rules-box { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; width: min(580px,92vw); max-height: 88vh; overflow: auto; }
+  #rules-box h3 { margin: 10px 0 3px; font-size: 14px; }
+  #rules-box p { margin: 0 0 6px; font-size: 11px; color: var(--muted); line-height: 1.5; }
+  #rules-box code { background: var(--bg); padding: 1px 4px; border-radius: 3px; }
+  #rules-box textarea { width: 100%; height: 110px; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 8px; font-family: monospace; font-size: 12px; resize: vertical; }
+  #rules-box .btns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+  #rules-box .btns button { padding: 7px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; }
+  #rules-save { background: var(--accent); color: #fff; }
+  #rules-close { background: #444; color: #fff; }
   .tbadge-img { height: 18px; width: 18px; border-radius: 3px; margin-right: 3px; vertical-align: middle; }
   .sys { color: var(--muted); font-style: italic; padding: 4px 8px; font-size: 12px; }
   #legend { font-size: 11px; color: var(--muted); padding: 6px 12px; border-top: 1px solid var(--line); background: var(--panel); }
@@ -63,11 +76,26 @@
     <input id="apibase" placeholder="API-Adresse" autocomplete="off">
     <input id="apikey" placeholder="API-Key" autocomplete="off">
     <button id="toggle">Verbinden</button>
+    <button id="rulesbtn" title="Highlight- & AutoMod-Regeln">⚙ Regeln</button>
     <span id="status"><span id="dot"></span><span id="statustext">nicht verbunden</span></span>
   </header>
   <div id="main">
     <div id="chat"></div>
     <div id="watchpanel"></div>
+  </div>
+
+  <div id="rules-overlay">
+    <div id="rules-box">
+      <h3>Highlight-Regeln (nur färben)</h3>
+      <p>Eine Regel pro Zeile. Prefixe: <code>color:rot/gelb/#hex</code>, <code>re:REGEX</code>, <code>w:wort</code>, <code>user:name</code>, <code>!status:m</code> (ohne Mods), <code>config:url</code>, <code>config:firstmsg</code>.<br>
+      Beispiele:<br><code>color:red !status:m config:url</code><br><code>color:orange config:firstmsg</code><br><code>color:yellow re:.*(.)\1{9,}.*</code></p>
+      <textarea id="hl-input" spellcheck="false" placeholder="color:red config:url"></textarea>
+      <h3>AutoMod-Regeln (Alarm + Aktion)</h3>
+      <p>Format: <code>ban REGEL</code> oder <code>timeout:SEKUNDEN REGEL</code> (z.B. <code>timeout:1</code> = 1 Sekunde).<br>
+      Beispiele:<br><code>timeout:1 config:url</code><br><code>timeout:600 badwort</code><br><code>ban re:(?i).*scam.*</code></p>
+      <textarea id="am-input" spellcheck="false" placeholder="timeout:600 badwort"></textarea>
+      <div class="btns"><button id="rules-close">Schließen</button><button id="rules-save">Speichern</button></div>
+    </div>
   </div>
   <div id="legend">
     Markierungen:
@@ -176,6 +204,119 @@ setInterval(watchTick, 1000);
 
 function escapeAttrText(s) { return String(s).replace(/[^a-z0-9_]/gi, ''); }
 
+// ---- Eigene Highlight- & AutoMod-Regeln (Chatty-Stil) ----
+let highlightRules = [];
+let automodRules = [];
+const URL_RE = /(https?:\/\/|www\.)\S+|\b[\w-]+\.(com|net|org|tv|gg|io|de|xyz|link|shop|info|ru|co)\b/i;
+
+function hasStatus(msg, codes) {
+  const map = { m: 'moderator', b: 'broadcaster', s: 'subscriber', v: 'vip', f: 'founder' };
+  const sets = (msg.badges || '').split(',').map((x) => x.split('/')[0]);
+  return codes.split('').some((c) => map[c] && sets.includes(map[c]));
+}
+
+// Wandelt Chatty/Java-Regex mit fuehrenden Inline-Flags (?i)/(?im)/(?s) in JS-Regex um
+function makeRegex(pattern) {
+  let flags = '';
+  const m = pattern.match(/^\(\?([a-z]+)\)/);
+  if (m) {
+    if (m[1].includes('i')) flags += 'i';
+    if (m[1].includes('m')) flags += 'm';
+    if (m[1].includes('s')) flags += 's';
+    pattern = pattern.slice(m[0].length);
+  }
+  return new RegExp(pattern, flags);
+}
+
+function parseRule(line) {
+  const rule = { color: null, tests: [], src: line };
+  const tokens = line.trim().split(/\s+/);
+  let i = 0;
+  for (; i < tokens.length; i++) {
+    const tk = tokens[i];
+    if (tk.startsWith('color:')) { rule.color = tk.slice(6); continue; }
+    if (tk.startsWith('!user:')) { const u = tk.slice(6).toLowerCase(); rule.tests.push((m) => m.user !== u); continue; }
+    if (tk.startsWith('user:')) { const u = tk.slice(5).toLowerCase(); rule.tests.push((m) => m.user === u); continue; }
+    if (tk.startsWith('!status:')) { const c = tk.slice(8); rule.tests.push((m) => !hasStatus(m, c)); continue; }
+    if (tk.startsWith('status:')) { const c = tk.slice(7); rule.tests.push((m) => hasStatus(m, c)); continue; }
+    if (tk === 'config:url') { rule.tests.push((m) => URL_RE.test(m.text)); continue; }
+    if (tk === 'config:firstmsg') { rule.tests.push((m) => m.firstMsg); continue; }
+    break; // ab hier kommt Text/Regex
+  }
+  const rest = tokens.slice(i).join(' ');
+  if (rest.startsWith('re:')) {
+    let re = null; try { re = makeRegex(rest.slice(3)); } catch { /* ungueltig */ }
+    rule.tests.push(re ? (m) => re.test(m.text) : () => false);
+  } else if (rest.startsWith('w:')) {
+    const w = rest.slice(2).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp('\\b' + w + '\\b', 'i');
+    rule.tests.push((m) => re.test(m.text));
+  } else if (rest) {
+    const t = rest.toLowerCase();
+    rule.tests.push((m) => m.text.toLowerCase().includes(t));
+  }
+  return rule;
+}
+
+function ruleMatches(rule, msg) { return rule.tests.length > 0 && rule.tests.every((t) => t(msg)); }
+
+function firstHighlightColor(msg) {
+  for (const r of highlightRules) if (ruleMatches(r, msg)) return r.color || '#f1c40f';
+  return null;
+}
+
+function parseAutomodRule(line) {
+  const t = line.trim();
+  if (!t || t.startsWith('#')) return null;
+  const sp = t.indexOf(' ');
+  const act = (sp === -1 ? t : t.slice(0, sp)).toLowerCase();
+  const rest = sp === -1 ? '' : t.slice(sp + 1);
+  if (!rest) return null;
+  if (act === 'ban') return { action: 'ban', seconds: null, label: 'BAN', rule: parseRule(rest) };
+  if (act.startsWith('timeout:') || act.startsWith('to:')) {
+    const seconds = Math.max(1, parseInt(act.split(':')[1], 10) || 1);
+    return { action: 'timeout', seconds, label: 'TIMEOUT ' + seconds + 's', rule: parseRule(rest) };
+  }
+  return null;
+}
+
+function matchAutomod(msg) {
+  for (const a of automodRules) if (ruleMatches(a.rule, msg)) return a;
+  return null;
+}
+
+function loadRules() {
+  const hl = localStorage.getItem('radar_highlights') || '';
+  const am = localStorage.getItem('radar_automod') || '';
+  highlightRules = hl.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#')).map(parseRule);
+  automodRules = am.split('\n').map(parseAutomodRule).filter(Boolean);
+}
+loadRules();
+
+let audioCtx = null;
+function playAlarm() {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type = 'square'; o.frequency.value = 880; g.gain.value = 0.08;
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(); o.stop(audioCtx.currentTime + 0.15);
+  } catch { /* Ton nicht moeglich */ }
+}
+
+function openRules() {
+  $('hl-input').value = localStorage.getItem('radar_highlights') || '';
+  $('am-input').value = localStorage.getItem('radar_automod') || '';
+  $('rules-overlay').style.display = 'flex';
+}
+function saveRules() {
+  localStorage.setItem('radar_highlights', $('hl-input').value);
+  localStorage.setItem('radar_automod', $('am-input').value);
+  loadRules();
+  $('rules-overlay').style.display = 'none';
+  sys(`Regeln gespeichert: ${highlightRules.length} Highlight(s), ${automodRules.length} AutoMod-Regel(n).`);
+}
+
 function setStatus(text, cls) {
   $('statustext').textContent = text;
   $('dot').className = cls || '';
@@ -277,6 +418,7 @@ function parsePrivmsg(line) {
     name: tags['display-name'] || userMatch[1],
     color: tags['color'] || '#bbbbbb',
     badges: tags['badges'] || '',
+    firstMsg: tags['first-msg'] === '1',
     text: textMatch[1],
   };
 }
@@ -364,10 +506,21 @@ function render(m) {
   if (active && !hot) div.classList.add('repeat'); // rot nur waehrend Cooldown
   if (hot) div.classList.add('hot'); // ueberschreibt die anderen Farben
 
+  // Eigene Highlight-Regeln (faerben, wenn nicht schon rot/hot)
+  const rmsg = { user: key, text: m.text, badges: m.badges, firstMsg: m.firstMsg };
+  if (!hot && !active) {
+    const c = firstHighlightColor(rmsg);
+    if (c) { div.style.borderLeftColor = c; div.style.borderLeftWidth = '4px'; div.style.background = 'rgba(255,255,255,.05)'; }
+  }
+  // AutoMod (Mods ausgenommen)
+  const am = !mod ? matchAutomod(rmsg) : null;
+  if (am) { div.classList.add('automod'); playAlarm(); }
+
   const t = new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
   let html = `<span class="time">${t}</span>`;
   html += badgesHtml(m.badges);
   html += `<span class="name" style="color:${escapeAttr(m.color)}">${escapeHtml(m.name)}</span>`;
+  if (am) html += `<span class="badge am">🤖 AUTOMOD → ${am.label}</span>`;
   if (hot) html += `<span class="badge hot">⛔ Wiederholt nach Timeout</span>`;
   if (off && off.count >= 1) html += `<span class="badge off">⚠ ${off.count}x Timeout</span>`;
   if (showCount && !hot) html += `<span class="badge rep">x${repeatCount}</span>`;
@@ -389,6 +542,10 @@ $('watchpanel').addEventListener('click', (e) => {
   const row = e.target.closest('.wrow');
   if (row && row.dataset.key) { watch.delete(row.dataset.key); renderWatchPanel(); }
 });
+
+$('rulesbtn').addEventListener('click', openRules);
+$('rules-save').addEventListener('click', saveRules);
+$('rules-close').addEventListener('click', () => { $('rules-overlay').style.display = 'none'; });
 
 $('toggle').addEventListener('click', () => connected ? disconnect() : connect());
 sys('Kanalnamen eingeben und auf "Verbinden" klicken. Nur-Lese-Modus, kein Login noetig.');
