@@ -223,6 +223,21 @@ const watch = new Map();     // username -> { name, count, redUntil, timedOutUnt
 const repeatScore = new Map(); // username -> Anzahl Wiederholungen insgesamt (permanent, waechst nur)
 let listTimer = null;
 
+// Auffaellige Nutzer + Zaehler dauerhaft speichern (ueberlebt Wegscrollen UND Neustart)
+function saveWatch() {
+  try {
+    localStorage.setItem('radar_watch', JSON.stringify([...watch.entries()]));
+    localStorage.setItem('radar_score', JSON.stringify([...repeatScore.entries()]));
+  } catch { /* Speicher voll o.ae. - egal */ }
+}
+function loadWatch() {
+  try {
+    for (const [k, v] of JSON.parse(localStorage.getItem('radar_watch') || '[]')) watch.set(k, v);
+    for (const [k, v] of JSON.parse(localStorage.getItem('radar_score') || '[]')) repeatScore.set(k, v);
+  } catch { /* nichts gespeichert */ }
+}
+loadWatch();
+
 // Mods/Streamer/Staff zaehlen nicht mit
 function isModLike(badgesTag) {
   if (!badgesTag) return false;
@@ -237,8 +252,9 @@ function renderWatchPanel() {
   const panel = $('watchpanel');
   if (!panel) return;
   if (watch.size === 0) { panel.innerHTML = ''; return; }
-  let html = `<div class="whead">Im Visier (${watch.size}) - Klick entfernt</div>`;
-  for (const [key, w] of watch) {
+  let html = `<div class="whead">Auffällig (${watch.size}) - Klick entfernt</div>`;
+  const sorted = [...watch.entries()].sort((a, b) => (b[1].count || 0) - (a[1].count || 0));
+  for (const [key, w] of sorted) {
     let status, cls;
     if (w.timedOutUntil > now) { status = '⏸ ' + fmtTime(Math.ceil((w.timedOutUntil - now) / 1000)); cls = 'paused'; }
     else if (w.redUntil > now) { status = '🔴 ' + fmtTime(Math.ceil((w.redUntil - now) / 1000)); cls = 'active'; }
@@ -524,7 +540,7 @@ function handleClearchat(line) {
     timeouts.set(key, { text: prev ? prev.text : null, time: Date.now() });
     // Cooldown eines Nutzers im Visier pausieren (startet nach Timeout neu)
     const w = watch.get(key);
-    if (w) { w.timedOutUntil = Date.now() + cc.duration * 1000; renderWatchPanel(); }
+    if (w) { w.timedOutUntil = Date.now() + cc.duration * 1000; renderWatchPanel(); saveWatch(); }
     sys('⏱ ' + cc.user + ' wurde getimeoutet (' + cc.duration + 's) - Cooldown pausiert.');
   } else {
     sys('⛔ ' + cc.user + ' wurde gebannt.');
@@ -569,6 +585,7 @@ function render(m) {
     const w0 = watch.get(key);
     if (w0 && winCount >= RS.redFrom && !(w0.timedOutUntil > now)) w0.redUntil = now + winMs();
     renderWatchPanel();
+    saveWatch();
   }
   const w = watch.get(key);
   const active = !!w && !mod && !(w.timedOutUntil > now) && w.redUntil > now; // rote Phase
@@ -618,7 +635,7 @@ function escapeAttr(s) { return /^#[0-9a-fA-F]{6}$/.test(s) ? s : '#bbbbbb'; }
 // Klick auf einen Eintrag im Visier entfernt ihn
 $('watchpanel').addEventListener('click', (e) => {
   const row = e.target.closest('.wrow');
-  if (row && row.dataset.key) { watch.delete(row.dataset.key); renderWatchPanel(); }
+  if (row && row.dataset.key) { watch.delete(row.dataset.key); repeatScore.delete(row.dataset.key); renderWatchPanel(); saveWatch(); }
 });
 
 $('rulesbtn').addEventListener('click', openRules);
