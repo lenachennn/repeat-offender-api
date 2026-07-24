@@ -618,7 +618,9 @@ function render(m) {
   if (am) html += `<span class="badge am">🤖 AUTOMOD → ${am.label}</span>`;
   if (hot) html += `<span class="badge hot">⛔ Wiederholt nach Timeout</span>`;
   if (off && off.count >= 1) html += `<span class="badge off">⚠ ${off.count}x Timeout</span>`;
-  if (!mod && score >= 1 && !hot) html += `<span class="badge rep">x${shown}</span>`;
+  // Wie Chatty: x2/x3 nur AUF der wiederholten Nachricht (nicht dauerhaft am Nutzer).
+  // Der Gesamt-Zaehler steht dauerhaft rechts in der Liste.
+  if (!mod && isRepeat && winCount >= 2 && !hot) html += `<span class="badge rep">x${winCount}</span>`;
   html += ': ' + escapeHtml(m.text);
   div.innerHTML = html;
 
